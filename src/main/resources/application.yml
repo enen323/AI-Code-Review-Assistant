@@ -1,0 +1,106 @@
+# ============================================================================
+# Default Application Configuration
+# ============================================================================
+# Active profile selection (set via SPRING_PROFILES_ACTIVE env var):
+#   (none)  - default production-like config (requires PostgreSQL + AI API key)
+#   local   - local development (localhost DB, debug logging, shorter timeouts)
+#   ci      - CI pipeline (GitHub Actions friendly, reduced verbosity)
+#
+# See: application-local.yml, application-ci.yml
+# ============================================================================
+
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-code-review-assistant
+
+  # Secrets loaded from application-secrets.yml (env var references)
+  config:
+    import: classpath:application-secrets.yml
+
+  # -----------------------------------------------------------------------
+  # AI Configuration
+  # -----------------------------------------------------------------------
+  ai:
+    openai:
+      api-key: ${secrets.ai-api-key}
+      base-url: ${secrets.ai-base-url}
+      chat:
+        options:
+          model: deepseek-v4-flash
+    vectorstore:
+      pgvector:
+        # Auto-initializes the pgvector extension schema on startup.
+        # Requires a running PostgreSQL instance with the pgvector extension.
+        initialize-schema: true
+
+  # -----------------------------------------------------------------------
+  # Datasource Configuration
+  # -----------------------------------------------------------------------
+  # Override the URL for your environment via env var or profile:
+  #   local profile: jdbc:postgresql://localhost:5432/ai_code_review
+  #   ci    profile: jdbc:postgresql://localhost:5432/ai_code_review
+  #   env   var:    SPRING_DATASOURCE_URL=jdbc:postgresql://<host>:5432/ai_code_review
+  datasource:
+    url: "jdbc:postgresql://192.168.100.128:5432/ai_code_review"
+    username: ${secrets.db-username}
+    password: ${secrets.db-password}
+    driver-class-name: org.postgresql.Driver
+
+  # -----------------------------------------------------------------------
+  # JPA / Hibernate Configuration
+  # -----------------------------------------------------------------------
+  jpa:
+    hibernate:
+      # Use "validate" in production to detect entity/schema drift.
+      # Use "update" locally (see application-local.yml).
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # -----------------------------------------------------------------------
+  # Flyway Migration Configuration
+  # -----------------------------------------------------------------------
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+# -----------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------
+logging:
+  level:
+    com.ai.code.review: DEBUG
+    org.springframework.ai: INFO
+    org.springframework.web: INFO
+
+# -----------------------------------------------------------------------
+# Actuator Endpoints (e.g., Docker health checks, Kubernetes probes)
+# -----------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+# -----------------------------------------------------------------------
+# GitHub Integration Configuration
+# -----------------------------------------------------------------------
+github:
+  api:
+    token: ${secrets.github-api-token}
+    webhook:
+      secret: ${secrets.github-webhook-secret}
+    proxy:
+      host: ${secrets.github-proxy-host}
+      port: ${secrets.github-proxy-port}
+

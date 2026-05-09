@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# CI Environment Configuration
+# Activated by SPRING_PROFILES_ACTIVE=ci (e.g., GitHub Actions)
+#
+# Overrides default application.yml settings for CI pipeline runs.
+# The PostgreSQL service container is reachable via localhost when using
+# the GitHub Actions "services" block with port mapping.
+# ---------------------------------------------------------------------------
+
+spring:
+  datasource:
+    # GitHub Actions exposes the postgres service container on localhost
+    url: jdbc:postgresql://192.168.100.128:5432/ai_code_review
+    username: ${secrets.db-username}
+    password: ${secrets.db-password}
+    hikari:
+      maximum-pool-size: 5
+      connection-timeout: 10000
+      idle-timeout: 300000
+
+  jpa:
+    # Skip DDL validation in CI to speed up startup
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  ai:
+    openai:
+      api-key: ${secrets.ai-api-key}
+      base-url: ${secrets.ai-base-url}
+      chat:
+        options:
+          model: deepseek-chat
+
+# Reduce logging verbosity for faster CI runs
+logging:
+  level:
+    com.ai.code.review: WARN
+    org.springframework: WARN
+    org.springframework.ai: WARN
+    org.hibernate: WARN
+    com.zaxxer.hikari: WARN
+
+# Shorter timeouts for CI
+server:
+  tomcat:
+    connection-timeout: 5000
