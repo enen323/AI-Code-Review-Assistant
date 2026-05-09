@@ -12,6 +12,7 @@ target/
 .env
 application-local.yml
 application-dev.yml
+application-secrets.yml
 *.iml
 **/node_modules/
 .DS_Store
