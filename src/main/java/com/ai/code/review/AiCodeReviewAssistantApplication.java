@@ -10,6 +10,5 @@ public class AiCodeReviewAssistantApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(AiCodeReviewAssistantApplication.class, args);
-        System.out.println("mvp");
     }
 }
