@@ -50,26 +50,24 @@ spring:
     driver-class-name: org.postgresql.Driver
 
   # -----------------------------------------------------------------------
-  # JPA / Hibernate Configuration
-  # -----------------------------------------------------------------------
-  jpa:
-    hibernate:
-      # Use "validate" in production to detect entity/schema drift.
-      # Use "update" locally (see application-local.yml).
-      ddl-auto: validate
-    show-sql: false
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
-        format_sql: true
-
-  # -----------------------------------------------------------------------
   # Flyway Migration Configuration
   # -----------------------------------------------------------------------
   flyway:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+
+# -----------------------------------------------------------------------
+# MyBatis-Plus Configuration
+# -----------------------------------------------------------------------
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
 
 # -----------------------------------------------------------------------
 # Logging Configuration

@@ -1,5 +1,6 @@
 package com.ai.code.review.memory;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ai.code.review.model.ChangeType;
 import com.ai.code.review.model.ChangedFile;
 import com.ai.code.review.model.CodeContext;
@@ -10,8 +11,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,16 +26,19 @@ import static org.mockito.Mockito.*;
 class MemoryServiceTest {
 
     @Mock
-    private JdbcTemplate jdbcTemplate;
+    private FeedbackRecordMapper feedbackRecordMapper;
+
+    @Mock
+    private RuleStatsMapper ruleStatsMapper;
 
     private MemoryService memoryService;
 
     @Captor
-    private ArgumentCaptor<Object[]> argsCaptor;
+    private ArgumentCaptor<FeedbackRecordEntity> entityCaptor;
 
     @BeforeEach
     void setUp() {
-        memoryService = new MemoryService(jdbcTemplate, 0.7);
+        memoryService = new MemoryService(feedbackRecordMapper, ruleStatsMapper, 0.7);
     }
 
     @Test
@@ -49,41 +51,26 @@ class MemoryServiceTest {
         memoryService.storeFeedback(record);
 
         // Verify INSERT into review_feedback
-        verify(jdbcTemplate).update(
-                eq("INSERT INTO review_feedback (pr_id, file_path, line_start, rule_category, agent_type, code_snippet, feedback, created_at) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-                eq("owner/repo#42"), eq("src/main/java/Test.java"), eq(10),
-                eq("SQL_INJECTION"), eq("security"), eq("SELECT * FROM users WHERE id = "),
-                eq("ACCEPTED"), any(LocalDateTime.class));
+        verify(feedbackRecordMapper).insert(entityCaptor.capture());
+        FeedbackRecordEntity entity = entityCaptor.getValue();
+        assertEquals("owner/repo#42", entity.getPrId());
+        assertEquals("SQL_INJECTION", entity.getRuleCategory());
+        assertEquals("ACCEPTED", entity.getFeedback());
 
         // Verify UPSERT into rule_stats
-        verify(jdbcTemplate).update(
-                argThat(sql -> sql.contains("INSERT INTO rule_stats")),
-                eq("security"), eq("SQL_INJECTION"), eq(1), eq(0), eq("ACCEPTED"), eq("ACCEPTED"));
+        verify(ruleStatsMapper).upsertStats("security", "SQL_INJECTION", true);
     }
 
     @Test
     void testStoreFeedbackDismissedTriggersDowngradeCheck() {
-        // Setup: rule already has 2 dismissals and 0 acceptances
-        when(jdbcTemplate.query(
-                contains("FROM rule_stats WHERE agent_type = ? AND rule_category = ?"),
-                any(RowMapper.class),
-                eq("security"), eq("SQL_INJECTION")))
-                .thenReturn(List.of(RuleStats.fromCounts("SQL_INJECTION", "security", 3, 0, 3, false)));
-
-        // Stub initial INSERT into review_feedback
-        when(jdbcTemplate.update(
-                contains("INSERT INTO review_feedback"),
-                anyString(), anyString(), anyInt(),
-                anyString(), anyString(), anyString(),
-                anyString(), any(LocalDateTime.class)))
-                .thenReturn(1);
-
-        // Stub UPSERT into rule_stats
-        when(jdbcTemplate.update(
-                contains("INSERT INTO rule_stats"),
-                eq("security"), eq("SQL_INJECTION"), eq(0), eq(1), eq("DISMISSED"), eq("DISMISSED")))
-                .thenReturn(1);
+        // Setup: rule already has 3 dismissals → after 4th, ratio = 1.0 > 0.7
+        when(ruleStatsMapper.selectOne(any())).thenReturn(
+                new RuleStatsEntity("security", "SQL_INJECTION") {{
+                    setTotal(3);
+                    setAccepted(0);
+                    setDismissed(3);
+                }}
+        );
 
         FeedbackRecord record = new FeedbackRecord(
                 "owner/repo#42", "src/main/java/Test.java", 10,
@@ -92,22 +79,43 @@ class MemoryServiceTest {
 
         memoryService.storeFeedback(record);
 
-        // After storing DISMISSED, the dismiss ratio should be 4/4 = 1.0 > 0.7
-        // So it should trigger the downgrade update
-        verify(jdbcTemplate).update(
-                eq("UPDATE rule_stats SET is_downgraded = true WHERE agent_type = ? AND rule_category = ?"),
-                eq("security"), eq("SQL_INJECTION"));
+        verify(ruleStatsMapper).upsertStats("security", "SQL_INJECTION", false);
+        // Downgrade should be triggered: 4/4 = 1.0 > 0.7
+        verify(ruleStatsMapper).markDowngraded("security", "SQL_INJECTION");
+    }
+
+    @Test
+    void testStoreFeedbackDismissedBelowThresholdNoDowngrade() {
+        // Setup: rule has 2 dismissals out of 10 → ratio = 0.2 < 0.7
+        when(ruleStatsMapper.selectOne(any())).thenReturn(
+                new RuleStatsEntity("security", "SQL_INJECTION") {{
+                    setTotal(10);
+                    setAccepted(8);
+                    setDismissed(2);
+                }}
+        );
+
+        FeedbackRecord record = new FeedbackRecord(
+                "owner/repo#42", "src/main/java/Test.java", 10,
+                "SQL_INJECTION", "security", "SELECT * FROM users WHERE id = ",
+                FeedbackType.DISMISSED);
+
+        memoryService.storeFeedback(record);
+
+        verify(ruleStatsMapper).upsertStats("security", "SQL_INJECTION", false);
+        // Ratio 3/11 = 0.27 < 0.7, no downgrade
+        verify(ruleStatsMapper, never()).markDowngraded(anyString(), anyString());
     }
 
     @Test
     void testGetRuleStats() {
-        when(jdbcTemplate.query(
-                contains("FROM rule_stats ORDER BY agent_type, rule_category"),
-                any(RowMapper.class)))
-                .thenReturn(List.of(
-                        RuleStats.fromCounts("SQL_INJECTION", "security", 5, 3, 2, false),
-                        RuleStats.fromCounts("NULL_POINTER", "logic", 10, 2, 8, true)
-                ));
+        RuleStatsEntity e1 = new RuleStatsEntity("security", "SQL_INJECTION");
+        e1.setTotal(5); e1.setAccepted(3); e1.setDismissed(2);
+
+        RuleStatsEntity e2 = new RuleStatsEntity("logic", "NULL_POINTER");
+        e2.setTotal(10); e2.setAccepted(2); e2.setDismissed(8); e2.setDowngraded(true);
+
+        when(ruleStatsMapper.selectList(null)).thenReturn(List.of(e1, e2));
 
         List<RuleStats> stats = memoryService.getRuleStats();
 
@@ -127,13 +135,10 @@ class MemoryServiceTest {
 
     @Test
     void testGetRuleStatsForSpecificRule() {
-        when(jdbcTemplate.query(
-                contains("FROM rule_stats WHERE agent_type = ? AND rule_category = ?"),
-                any(RowMapper.class),
-                eq("security"), eq("XSS")))
-                .thenReturn(List.of(
-                        RuleStats.fromCounts("XSS", "security", 3, 1, 2, false)
-                ));
+        RuleStatsEntity entity = new RuleStatsEntity("security", "XSS");
+        entity.setTotal(3); entity.setAccepted(1); entity.setDismissed(2);
+
+        when(ruleStatsMapper.selectOne(any())).thenReturn(entity);
 
         RuleStats stats = memoryService.getRuleStats("security", "XSS");
 
@@ -146,11 +151,7 @@ class MemoryServiceTest {
 
     @Test
     void testGetRuleStatsForNonExistentRuleReturnsNull() {
-        when(jdbcTemplate.query(
-                contains("FROM rule_stats WHERE agent_type = ? AND rule_category = ?"),
-                any(RowMapper.class),
-                eq("security"), eq("NONEXISTENT")))
-                .thenReturn(List.of());
+        when(ruleStatsMapper.selectOne(any())).thenReturn(null);
 
         RuleStats stats = memoryService.getRuleStats("security", "NONEXISTENT");
         assertNull(stats);
@@ -158,22 +159,14 @@ class MemoryServiceTest {
 
     @Test
     void testIsRuleDowngraded() {
-        when(jdbcTemplate.query(
-                contains("SELECT is_downgraded FROM rule_stats WHERE agent_type = ? AND rule_category = ?"),
-                any(RowMapper.class),
-                eq("logic"), eq("NULL_POINTER")))
-                .thenReturn(List.of(true));
+        when(ruleStatsMapper.selectCount(any())).thenReturn(1L);
 
         assertTrue(memoryService.isRuleDowngraded("logic", "NULL_POINTER"));
     }
 
     @Test
     void testIsRuleDowngradedReturnsFalseWhenNoStats() {
-        when(jdbcTemplate.query(
-                contains("SELECT is_downgraded FROM rule_stats"),
-                any(RowMapper.class),
-                eq("security"), eq("FAKE")))
-                .thenReturn(List.of());
+        when(ruleStatsMapper.selectCount(any())).thenReturn(0L);
 
         assertFalse(memoryService.isRuleDowngraded("security", "FAKE"));
     }
@@ -182,22 +175,23 @@ class MemoryServiceTest {
     void testResetRuleStats() {
         memoryService.resetRuleStats("security", "SQL_INJECTION");
 
-        verify(jdbcTemplate).update(
-                eq("DELETE FROM rule_stats WHERE agent_type = ? AND rule_category = ?"),
-                eq("security"), eq("SQL_INJECTION"));
+        verify(ruleStatsMapper).delete(any());
     }
 
     @Test
     void testGetRecentFeedback() {
-        when(jdbcTemplate.query(
-                contains("FROM review_feedback WHERE file_path = ? AND line_start = ?"),
-                any(RowMapper.class),
-                eq("Test.java"), eq(10)))
-                .thenReturn(List.of(
-                        new FeedbackRecord(1L, "repo#1", "Test.java", 10,
-                                "SQL_INJECTION", "security", "SELECT * FROM ",
-                                FeedbackType.DISMISSED, LocalDateTime.now())
-                ));
+        FeedbackRecordEntity entity = new FeedbackRecordEntity();
+        entity.setId(1L);
+        entity.setPrId("repo#1");
+        entity.setFilePath("Test.java");
+        entity.setLineStart(10);
+        entity.setRuleCategory("SQL_INJECTION");
+        entity.setAgentType("security");
+        entity.setCodeSnippet("SELECT * FROM ");
+        entity.setFeedback("DISMISSED");
+        entity.setCreatedAt(LocalDateTime.now());
+
+        when(feedbackRecordMapper.selectList(any())).thenReturn(List.of(entity));
 
         List<FeedbackRecord> feedback = memoryService.getRecentFeedback("Test.java", 10);
 
@@ -208,19 +202,12 @@ class MemoryServiceTest {
 
     @Test
     void testGetMemoryHintsWithDowngradedRules() {
-        when(jdbcTemplate.query(
-                contains("FROM rule_stats ORDER BY agent_type, rule_category"),
-                any(RowMapper.class)))
-                .thenReturn(List.of(
-                        RuleStats.fromCounts("NULL_POINTER", "logic", 10, 2, 8, true)
-                ));
+        RuleStatsEntity downgraded = new RuleStatsEntity("logic", "NULL_POINTER");
+        downgraded.setTotal(10); downgraded.setAccepted(2); downgraded.setDismissed(8);
+        downgraded.setDowngraded(true);
 
-        // Mock no file feedback
-        when(jdbcTemplate.queryForObject(
-                contains("FROM review_feedback WHERE file_path = ?"),
-                eq(Integer.class),
-                anyString()))
-                .thenReturn(0);
+        when(ruleStatsMapper.selectList(null)).thenReturn(List.of(downgraded));
+        when(feedbackRecordMapper.selectCount(any())).thenReturn(0L);
 
         CodeContext context = new CodeContext(
                 "pr1",
