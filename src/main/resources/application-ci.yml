@@ -11,8 +11,8 @@ spring:
   datasource:
     # GitHub Actions exposes the postgres service container on localhost
     url: jdbc:postgresql://192.168.100.128:5432/ai_code_review
-    username: ${secrets.db-username}
-    password: ${secrets.db-password}
+    username: ${secrets.db-username:}
+    password: ${secrets.db-password:}
     hikari:
       maximum-pool-size: 5
       connection-timeout: 10000
@@ -29,8 +29,8 @@ spring:
 
   ai:
     openai:
-      api-key: ${secrets.ai-api-key}
-      base-url: ${secrets.ai-base-url}
+      api-key: ${secrets.ai-api-key:}
+      base-url: ${secrets.ai-base-url:}
       chat:
         options:
           model: deepseek-chat
