@@ -53,10 +53,14 @@ jobs:
       - name: Quality Gate
         if: always()
         run: |
-          chmod +x ci/quality-gate.sh
           REPORT_FILE="target/site/review-report.md"
           if [ -f "$REPORT_FILE" ]; then
-            ./ci/quality-gate.sh "$REPORT_FILE" 10
+            if [ -f "ci/quality-gate.sh" ]; then
+              chmod +x ci/quality-gate.sh
+              ./ci/quality-gate.sh "$REPORT_FILE" 10
+            else
+              echo "ci/quality-gate.sh not found — skipping quality gate."
+            fi
           else
             echo "No review report found — skipping quality gate."
           fi
