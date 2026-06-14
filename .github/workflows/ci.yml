@@ -12,7 +12,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:0.7.0
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_DB: ai_code_review
           POSTGRES_USER: postgres
