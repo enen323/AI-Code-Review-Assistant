@@ -1,16 +1,12 @@
 package com.ai.code.review.memory;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.ai.code.review.model.CodeContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,12 +26,15 @@ public class MemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
 
-    private final JdbcTemplate jdbcTemplate;
+    private final FeedbackRecordMapper feedbackRecordMapper;
+    private final RuleStatsMapper ruleStatsMapper;
     private final double downgradeThreshold;
 
-    public MemoryService(JdbcTemplate jdbcTemplate,
+    public MemoryService(FeedbackRecordMapper feedbackRecordMapper,
+                         RuleStatsMapper ruleStatsMapper,
                          @Value("${memory.downgrade-threshold:0.7}") double downgradeThreshold) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.feedbackRecordMapper = feedbackRecordMapper;
+        this.ruleStatsMapper = ruleStatsMapper;
         this.downgradeThreshold = downgradeThreshold;
     }
 
@@ -51,38 +50,12 @@ public class MemoryService {
                 record.feedback(), record.ruleCategory(), record.agentType());
 
         // Insert the feedback record
-        jdbcTemplate.update(
-                "INSERT INTO review_feedback (pr_id, file_path, line_start, rule_category, agent_type, code_snippet, feedback, created_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                record.prId(),
-                record.filePath(),
-                record.lineStart(),
-                record.ruleCategory(),
-                record.agentType(),
-                record.codeSnippet(),
-                record.feedback().name(),
-                record.createdAt()
-        );
+        FeedbackRecordEntity entity = new FeedbackRecordEntity(record);
+        feedbackRecordMapper.insert(entity);
 
         // Upsert rule stats
-        String upsertSql = """
-                INSERT INTO rule_stats (agent_type, rule_category, total, accepted, dismissed, is_downgraded)
-                VALUES (?, ?, 1, ?, ?, false)
-                ON CONFLICT (agent_type, rule_category)
-                DO UPDATE SET
-                    total = rule_stats.total + 1,
-                    accepted = CASE WHEN ? = 'ACCEPTED' THEN rule_stats.accepted + 1 ELSE rule_stats.accepted END,
-                    dismissed = CASE WHEN ? = 'DISMISSED' THEN rule_stats.dismissed + 1 ELSE rule_stats.dismissed END
-                """;
-
-        jdbcTemplate.update(upsertSql,
-                record.agentType(),
-                record.ruleCategory(),
-                record.feedback() == FeedbackType.ACCEPTED ? 1 : 0,
-                record.feedback() == FeedbackType.DISMISSED ? 1 : 0,
-                record.feedback().name(),
-                record.feedback().name()
-        );
+        boolean isAccepted = record.feedback() == FeedbackType.ACCEPTED;
+        ruleStatsMapper.upsertStats(record.agentType(), record.ruleCategory(), isAccepted);
 
         // Check for false-positive decay when feedback is DISMISSED
         if (record.feedback() == FeedbackType.DISMISSED) {
@@ -99,10 +72,8 @@ public class MemoryService {
      * @return list of all rule stats
      */
     public List<RuleStats> getRuleStats() {
-        String sql = "SELECT rule_category, agent_type, total, accepted, dismissed, is_downgraded "
-                   + "FROM rule_stats ORDER BY agent_type, rule_category";
-
-        return jdbcTemplate.query(sql, new RuleStatsRowMapper());
+        List<RuleStatsEntity> entities = ruleStatsMapper.selectList(null);
+        return entities.stream().map(RuleStatsEntity::toRuleStats).toList();
     }
 
     /**
@@ -113,11 +84,11 @@ public class MemoryService {
      * @return the rule stats, or null if not found
      */
     public RuleStats getRuleStats(String agentType, String ruleCategory) {
-        String sql = "SELECT rule_category, agent_type, total, accepted, dismissed, is_downgraded "
-                   + "FROM rule_stats WHERE agent_type = ? AND rule_category = ?";
-
-        List<RuleStats> results = jdbcTemplate.query(sql, new RuleStatsRowMapper(), agentType, ruleCategory);
-        return results.isEmpty() ? null : results.get(0);
+        LambdaQueryWrapper<RuleStatsEntity> wrapper = new LambdaQueryWrapper<RuleStatsEntity>()
+                .eq(RuleStatsEntity::getAgentType, agentType)
+                .eq(RuleStatsEntity::getRuleCategory, ruleCategory);
+        RuleStatsEntity entity = ruleStatsMapper.selectOne(wrapper);
+        return entity != null ? entity.toRuleStats() : null;
     }
 
     /**
@@ -128,11 +99,14 @@ public class MemoryService {
      * @return list of feedback records for this location
      */
     public List<FeedbackRecord> getRecentFeedback(String filePath, int lineStart) {
-        String sql = "SELECT id, pr_id, file_path, line_start, rule_category, agent_type, code_snippet, feedback, created_at "
-                   + "FROM review_feedback WHERE file_path = ? AND line_start = ? "
-                   + "ORDER BY created_at DESC LIMIT 50";
+        LambdaQueryWrapper<FeedbackRecordEntity> wrapper = new LambdaQueryWrapper<FeedbackRecordEntity>()
+                .eq(FeedbackRecordEntity::getFilePath, filePath)
+                .eq(FeedbackRecordEntity::getLineStart, String.valueOf(lineStart))
+                .orderByDesc(FeedbackRecordEntity::getCreatedAt)
+                .last("LIMIT 50");
 
-        return jdbcTemplate.query(sql, new FeedbackRecordRowMapper(), filePath, lineStart);
+        List<FeedbackRecordEntity> entities = feedbackRecordMapper.selectList(wrapper);
+        return entities.stream().map(FeedbackRecordEntity::toRecord).toList();
     }
 
     /**
@@ -143,11 +117,11 @@ public class MemoryService {
      * @return true if the rule is downgraded, false otherwise
      */
     public boolean isRuleDowngraded(String agentType, String ruleCategory) {
-        String sql = "SELECT is_downgraded FROM rule_stats WHERE agent_type = ? AND rule_category = ?";
-        List<Boolean> results = jdbcTemplate.query(sql,
-                (rs, rowNum) -> rs.getBoolean("is_downgraded"),
-                agentType, ruleCategory);
-        return !results.isEmpty() && Boolean.TRUE.equals(results.get(0));
+        LambdaQueryWrapper<RuleStatsEntity> wrapper = new LambdaQueryWrapper<RuleStatsEntity>()
+                .eq(RuleStatsEntity::getAgentType, agentType)
+                .eq(RuleStatsEntity::getRuleCategory, ruleCategory)
+                .eq(RuleStatsEntity::isDowngraded, true);
+        return ruleStatsMapper.selectCount(wrapper) > 0;
     }
 
     /**
@@ -159,8 +133,10 @@ public class MemoryService {
      */
     public void resetRuleStats(String agentType, String ruleCategory) {
         log.info("Resetting rule stats for {}/{}", agentType, ruleCategory);
-        jdbcTemplate.update("DELETE FROM rule_stats WHERE agent_type = ? AND rule_category = ?",
-                agentType, ruleCategory);
+        LambdaQueryWrapper<RuleStatsEntity> wrapper = new LambdaQueryWrapper<RuleStatsEntity>()
+                .eq(RuleStatsEntity::getAgentType, agentType)
+                .eq(RuleStatsEntity::getRuleCategory, ruleCategory);
+        ruleStatsMapper.delete(wrapper);
     }
 
     /**
@@ -198,9 +174,9 @@ public class MemoryService {
             }
 
             // Count feedback records for this file
-            Integer count = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM review_feedback WHERE file_path = ?",
-                    Integer.class, filePath);
+            LambdaQueryWrapper<FeedbackRecordEntity> countWrapper = new LambdaQueryWrapper<FeedbackRecordEntity>()
+                    .eq(FeedbackRecordEntity::getFilePath, filePath);
+            Long count = feedbackRecordMapper.selectCount(countWrapper);
 
             if (count != null && count > 0) {
                 hints.add(String.format("File '%s' has %d past feedback record(s).", filePath, count));
@@ -227,47 +203,7 @@ public class MemoryService {
             log.warn("Rule '{}/{}' exceeded dismiss threshold (ratio={}, threshold={}). Marking as downgraded.",
                     agentType, ruleCategory, String.format("%.2f", ratio), downgradeThreshold);
 
-            jdbcTemplate.update(
-                    "UPDATE rule_stats SET is_downgraded = true WHERE agent_type = ? AND rule_category = ?",
-                    agentType, ruleCategory);
-        }
-    }
-
-    /**
-     * RowMapper for converting query results to RuleStats records.
-     */
-    private static class RuleStatsRowMapper implements RowMapper<RuleStats> {
-        @Override
-        public RuleStats mapRow(ResultSet rs, int rowNum) throws SQLException {
-            int total = rs.getInt("total");
-            int accepted = rs.getInt("accepted");
-            int dismissed = rs.getInt("dismissed");
-            boolean isDowngraded = rs.getBoolean("is_downgraded");
-            return RuleStats.fromCounts(
-                    rs.getString("rule_category"),
-                    rs.getString("agent_type"),
-                    total, accepted, dismissed, isDowngraded
-            );
-        }
-    }
-
-    /**
-     * RowMapper for converting query results to FeedbackRecord records.
-     */
-    private static class FeedbackRecordRowMapper implements RowMapper<FeedbackRecord> {
-        @Override
-        public FeedbackRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
-            return new FeedbackRecord(
-                    rs.getLong("id"),
-                    rs.getString("pr_id"),
-                    rs.getString("file_path"),
-                    rs.getInt("line_start"),
-                    rs.getString("rule_category"),
-                    rs.getString("agent_type"),
-                    rs.getString("code_snippet"),
-                    FeedbackType.valueOf(rs.getString("feedback")),
-                    rs.getObject("created_at", LocalDateTime.class)
-            );
+            ruleStatsMapper.markDowngraded(agentType, ruleCategory);
         }
     }
 }

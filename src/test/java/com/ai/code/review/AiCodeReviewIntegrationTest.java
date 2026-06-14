@@ -5,7 +5,9 @@ import com.ai.code.review.aggregation.ResultAggregator;
 import com.ai.code.review.context.ContextBuilder;
 import com.ai.code.review.context.GitHubClient;
 import com.ai.code.review.trigger.GitHubWebhookPayload;
+import com.ai.code.review.memory.FeedbackRecordMapper;
 import com.ai.code.review.memory.MemoryService;
+import com.ai.code.review.memory.RuleStatsMapper;
 import com.ai.code.review.model.*;
 import com.ai.code.review.orchestration.OrchestratorAgent;
 import com.ai.code.review.report.PRCommentPublisher;
@@ -50,8 +52,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     "spring.autoconfigure.exclude="
         + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration,"
-        + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
-        + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration",
+        + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration,"
+        + "com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration",
     "spring.ai.openai.api-key=test-key",
     "github.api.token=test-token",
     "github.api.webhook.secret=test-secret"
@@ -88,6 +90,12 @@ class AiCodeReviewIntegrationTest {
 
     @MockBean
     private PRCommentPublisher prCommentPublisher;
+
+    @MockBean
+    private FeedbackRecordMapper feedbackRecordMapper;
+
+    @MockBean
+    private RuleStatsMapper ruleStatsMapper;
 
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec callSpec;
