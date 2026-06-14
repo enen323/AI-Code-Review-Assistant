@@ -18,15 +18,15 @@ spring:
 
   # Secrets loaded from application-secrets.yml (env var references)
   config:
-    import: classpath:application-secrets.yml
+    import: optional:classpath:application-secrets.yml
 
   # -----------------------------------------------------------------------
   # AI Configuration
   # -----------------------------------------------------------------------
   ai:
     openai:
-      api-key: ${secrets.ai-api-key}
-      base-url: ${secrets.ai-base-url}
+      api-key: ${secrets.ai-api-key:}
+      base-url: ${secrets.ai-base-url:}
       chat:
         options:
           model: deepseek-v4-flash
@@ -45,8 +45,8 @@ spring:
   #   env   var:    SPRING_DATASOURCE_URL=jdbc:postgresql://<host>:5432/ai_code_review
   datasource:
     url: "jdbc:postgresql://192.168.100.128:5432/ai_code_review"
-    username: ${secrets.db-username}
-    password: ${secrets.db-password}
+    username: ${secrets.db-username:}
+    password: ${secrets.db-password:}
     driver-class-name: org.postgresql.Driver
 
   # -----------------------------------------------------------------------
@@ -97,10 +97,10 @@ management:
 # -----------------------------------------------------------------------
 github:
   api:
-    token: ${secrets.github-api-token}
+    token: ${secrets.github-api-token:}
     webhook:
-      secret: ${secrets.github-webhook-secret}
+      secret: ${secrets.github-webhook-secret:}
     proxy:
-      host: ${secrets.github-proxy-host}
-      port: ${secrets.github-proxy-port}
+      host: ${secrets.github-proxy-host:}
+      port: ${secrets.github-proxy-port:}
 

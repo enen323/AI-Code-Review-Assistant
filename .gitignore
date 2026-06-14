@@ -11,6 +11,10 @@ target/
 .classpath
 .env
 application-local.yml
+# Docker files (keep locally, not committed)
+.dockerignore
+Dockerfile
+docker-compose.yml
 application-dev.yml
 application-secrets.yml
 *.iml
