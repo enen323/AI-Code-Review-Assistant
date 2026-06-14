@@ -52,6 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         + "org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration",
+    "spring.ai.openai.base-url=http://localhost:8080",
     "spring.ai.openai.api-key=test-key",
     "github.api.token=test-token",
     "github.api.webhook.secret=test-secret"
